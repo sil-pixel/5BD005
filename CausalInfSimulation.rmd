@@ -1,0 +1,48 @@
+---
+title: "Simulation Study to estimate NDE and NIE"
+author: "Silpa Soni Nallacheruvu, Sam Andersson"
+date: "2025-11-28"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dagitty)
+set.seed(42)
+```
+
+## Causal dag fig 2(a)
+
+```{r, echo=FALSE, message=FALSE}
+dag <- dagitty("dag {
+X -> Z
+T -> X
+T -> S
+S -> Z
+X -> Y
+Z -> Y
+}")
+
+plot(dag)
+
+```
+
+## Data generation from the causal dag
+
+```{r}
+```
+
+
+## Estimator NDE
+
+```{r}
+```
+
+
+
+## Estimator NIE 
+
+```{r}
+```
+
+
