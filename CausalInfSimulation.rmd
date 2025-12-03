@@ -1,5 +1,6 @@
 ---
 title: "Simulation Study to estimate NDE and NIE"
+author: Silpa Soni Nallacheruvu
 date: "`r Sys.Date()`"
 output:
   pdf_document: default
@@ -32,47 +33,105 @@ plot(dag)
 ## Data generation from the causal dag
 
 ```{r}
-
-true_nde <- 2.0
-true_nie <- 1.5
 generate_data <- function(n) {
   T <- rnorm(n)
   X <- rbinom(n, 1, plogis(0.5 * T))
   S <- 0.5 * T + rnorm(n)
-  Z <- 1 + 1 * X + 0.5 * S + rnorm(n)
-  Y <- 2 + true_nde * X + true_nie * Z + rnorm(n)
+  Z <- rbinom(n, 1, plogis(0.5 * X + 0.5 * S))
+  Y <- rbinom(n, 1, plogis(0.5 * X + 0.5 * Z))
   
   data.frame(Y = Y, X = X, Z = Z, S = S, T = T)
 }
 
+sample_data <- generate_data(5)
+
+sample_data
+
 ```
 
+## The true effects of NDE and NIE via Monte Carlo approximation
 
-## Estimator NDE
+```{r}
+true_effects <- function(n = 1e6) {
+  
+  T <- rnorm(n)
+  X_0 <- 0
+  X_1 <- 1
+  S <- 0.5 * T + rnorm(n)
+  
+  Z_0 <- rbinom(n, 1, plogis(0.5 * X_0 + 0.5 * S))
+  Z_1 <- rbinom(n, 1, plogis(0.5 * X_1 + 0.5 * S))
+  
+  Y_00 <- rbinom(n, 1, plogis(0.5 * X_0 + 0.5 * Z_0))
+  Y_01 <- rbinom(n, 1, plogis(0.5 * X_0 + 0.5 * Z_1))
+  Y_10 <- rbinom(n, 1, plogis(0.5 * X_1 + 0.5 * Z_0))
+  
+  # NDE = E[Y(1, Z(0))] - E[Y(0, Z(0))]
+  true_nde <- mean(Y_10) - mean(Y_00)
+
+  # NIE = E[Y(0, Z(1))] - E[Y(0, Z(0))]
+  true_nie <- mean(Y_01) - mean(Y_00)
+  
+  return(list(true_nde = true_nde, true_nie = true_nie))
+}
+
+# Generate large dataset to approximate true effects
+true_effects_values <- true_effects()
+
+true_nde <- true_effects_values$true_nde
+true_nie <- true_effects_values$true_nie
+
+true_nde
+true_nie
+
+```
+
+## Estimator NDE 
+
+The plug-in estimator for NDE : 
+
+$\widehat{\text{NDE}}=\sum_{s}\sum_{z}\left[\widehat{E}(Y\mid x,z) - \widehat{E}(Y\mid x^{*},z)\right]\widehat{P}(z\mid x^{*},s)\,\widehat{P}(s)$
+
 
 ```{r}
 estimate_NDE <- function(data, x = 1, x_star = 0) {
   # Fit models
-  model_Y <- lm(Y ~ X + Z, data = data)
-  model_Z <- lm(Z ~ X + S, data = data)
+  model_Y <- glm(Y ~ X + Z, data = data, family = binomial)
+  model_Z <- glm(Z ~ X + S, data = data, family = binomial)
   
   n <- nrow(data)
   nde_sum <- 0
   
+  # By monte carlo approximation, integral over s is approximated by sum over observed s values
+  # p(s) is approximated by the empirical distribution of s
+  p_s <- 1/n
+  
   for (i in 1:n) {
     s_i <- data$S[i]
     
-    # Predict Z given X=x_star, S=s_i
-    z_pred <- predict(model_Z, newdata = data.frame(X = x_star, S = s_i))
-    
-    # E[Y|X=x, Z=z_pred] - E[Y|X=x_star, Z=z_pred]
-    y_x <- predict(model_Y, newdata = data.frame(X = x, Z = z_pred))
-    y_xstar <- predict(model_Y, newdata = data.frame(X = x_star, Z = z_pred))
-    
-    nde_sum <- nde_sum + (y_x - y_xstar)
+    for(z in c(0,1)) {
+      
+      # get the predicted p(Z=1|x*,s) 
+      prob_z1 <- predict(model_Z, newdata = data.frame(X = x_star, S = s_i), type = "response")
+      
+      if(z == 1) {
+        p_z_xstar <- prob_z1
+      } else {
+        p_z_xstar <- 1 - prob_z1
+      }
+      
+      # E[Y|X=x, Z=z] = P(Y=1|x, z)
+      y_x <- predict(model_Y, newdata = data.frame(X = x, Z = z), type = "response")
+      
+      #  E[Y|X=x_star, Z=z] = P(Y=1|x*, z)
+      y_xstar <- predict(model_Y, newdata = data.frame(X = x_star, Z = z), type = "response")
+      
+      # Using the plug-in estimator for NDE 
+      nde_sum <- nde_sum + (y_x - y_xstar)* p_z_xstar * p_s
+    }
   }
   
-  return(nde_sum / n)
+  return(nde_sum)
 }
 ```
 
@@ -80,40 +139,62 @@ estimate_NDE <- function(data, x = 1, x_star = 0) {
 
 ## Estimator NIE 
 
+The plug-in estimator for NIE :
+
+$\widehat{\text{NIE}}=\sum_{s}\sum_{z}\widehat{E}(Y\mid x^{*},z)\,\left[\widehat{P}(z\mid x,s) - \widehat{P}(z\mid x^{*},s)\right]\widehat{P}(s)$
+
 ```{r}
 estimate_NIE <- function(data, x = 1, x_star = 0) {
   # Fit models
-  model_Y <- lm(Y ~ X + Z, data = data)
-  model_Z <- lm(Z ~ X + S, data = data)
+  model_Y <- glm(Y ~ X + Z, data = data, family = binomial)
+  model_Z <- glm(Z ~ X + S, data = data, family = binomial)
   
   n <- nrow(data)
   nie_sum <- 0
   
+  # By monte carlo approximation, integral over s is approximated by sum over observed s values
+  # p(s) is approximated by the empirical distribution of s
+  p_s <- 1/n
+  
   for (i in 1:n) {
     s_i <- data$S[i]
     
-    # Predict Z given X=x, S=s_i
-    z_x <- predict(model_Z, newdata = data.frame(X = x, S = s_i))
-    
-    # Predict Z given X=x_star, S=s_i
-    z_xstar <- predict(model_Z, newdata = data.frame(X = x_star, S = s_i))
-    
-    # E[Y|X=x_star, Z=z_x] - E[Y|X=x_star, Z=z_xstar]
-    y_zx <- predict(model_Y, newdata = data.frame(X = x_star, Z = z_x))
-    y_zxstar <- predict(model_Y, newdata = data.frame(X = x_star, Z = z_xstar))
-    
-    nie_sum <- nie_sum + (y_zx - y_zxstar)
+    for(z in c(0,1)) {
+      
+      # get the predicted p(Z=1|x,s) 
+      prob_z1 <- predict(model_Z, newdata = data.frame(X = x, S = s_i), type = "response")
+      
+      if(z == 1) {
+        p_zx <- prob_z1
+      } else {
+        p_zx <- 1 - prob_z1
+      }
+      # get the predicted p(Z=1|x*,s)
+      prob_z0 <- predict(model_Z, newdata = data.frame(X = x_star, S = s_i), type = "response")
+      
+      if(z == 1) {
+        p_z_xstar <- prob_z0
+      } else {
+        p_z_xstar <- 1 - prob_z0
+      }
+      
+      # E[Y|X=x_star, Z=z] = P(Y=1|x*, z)
+      y_z_xstar <- predict(model_Y, newdata = data.frame(X = x_star, Z = z), type = "response")
+      
+      # Using the plug-in estimator for NIE
+      nie_sum <- nie_sum + y_z_xstar * (p_zx - p_z_xstar) * p_s
+    }
   }
   
-  return(nie_sum / n)
+  return(nie_sum)
 }
 ```
 
 ## Run the simulations 
 
-```{r}
+```{r, warning=FALSE, message=FALSE}
 sample_sizes <- c(100, 500, 1000, 2000, 5000, 10000)
-n_sims <- 50
+n_sims <- 100
 
 results <- data.frame()
 
@@ -130,15 +211,22 @@ for (n in sample_sizes) {
     estimate_NIE(data)
   })
   
+  nde_mean <- mean(nde_estimates)
+  nie_mean <- mean(nie_estimates)
+  
   results <- rbind(results, data.frame(
     n = n,
-    NDE_mean = mean(nde_estimates),
-    NDE_bias = mean(nde_estimates) - true_nde,
-    NIE_mean = mean(nie_estimates),
-    NIE_bias = mean(nie_estimates) - true_nie
+    NDE_mean = nde_mean,
+    NDE_bias = nde_mean - true_nde,
+    NIE_mean = nie_mean,
+    NIE_bias = nie_mean - true_nie
   ))
 }
+```
 
+## Display the results
+
+```{r}
 print(results)
 ```
 
@@ -152,9 +240,9 @@ plot(results$n, results$NDE_mean,
      type = "b", pch = 19, col = "blue", lwd = 2, cex = 1.5,
      xlab = "Sample Size", ylab = "NDE Estimate",
      main = "NDE Estimates vs Sample Size",
-     ylim = range(c(results$NDE_mean, 2)))
-abline(h = 2, col = "red", lty = 2, lwd = 2)
-legend("topright", legend = c("Estimate", "True NDE = 2"), 
+     ylim = range(c(results$NDE_mean, true_nde)))
+abline(h = true_nde, col = "red", lty = 2, lwd = 2)
+legend("topright", legend = c("Estimate", "True NDE"), 
        col = c("blue", "red"), lty = c(1, 2), lwd = 2)
 
 ```
@@ -165,6 +253,7 @@ legend("topright", legend = c("Estimate", "True NDE = 2"),
 plot(results$n, results$NDE_bias, 
      type = "b", pch = 19, col = "blue", lwd = 2, cex = 1.5,
      xlab = "Sample Size", ylab = "Bias",
+     ylim = range(c(0, results$NDE_bias)),
      main = "NDE Bias Convergence to Zero")
 abline(h = 0, col = "red", lty = 2, lwd = 2)
 ```
@@ -175,8 +264,10 @@ plot(results$n, results$NIE_mean,
      type = "b", pch = 19, col = "darkgreen", lwd = 2, cex = 1.5,
      xlab = "Sample Size", ylab = "NIE Estimate",
      main = "NIE Estimates vs Sample Size",
-     ylim = range(c(results$NIE_mean, 1.5)))
-abline(h = 1.5, col = "red", lty = 2, lwd = 2)
+     ylim = range(c(results$NIE_mean, true_nie)))
+abline(h = true_nie , col = "red", lty = 2, lwd = 2)
+legend("topright", legend = c("Estimate", "True NIE"), 
+       col = c("blue", "red"), lty = c(1, 2), lwd = 2)
 
 ```
 
@@ -186,6 +277,7 @@ abline(h = 1.5, col = "red", lty = 2, lwd = 2)
 plot(results$n, results$NIE_bias, 
      type = "b", pch = 19, col = "darkgreen", lwd = 2, cex = 1.5,
      xlab = "Sample Size", ylab = "Bias",
+     ylim = range(c(0, results$NIE_bias)),
      main = "NIE Bias Convergence to Zero")
 abline(h = 0, col = "red", lty = 2, lwd = 2)
 
