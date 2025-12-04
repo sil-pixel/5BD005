@@ -3,8 +3,8 @@ title: "Simulation Study to estimate NDE and NIE"
 author: Silpa Soni Nallacheruvu
 date: "`r Sys.Date()`"
 output:
-  pdf_document: default
   html_document: default
+  pdf_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -92,6 +92,12 @@ The plug-in estimator for NDE :
 
 $\widehat{\text{NDE}}=\sum_{s}\sum_{z}\left[\widehat{E}(Y\mid x,z) - \widehat{E}(Y\mid x^{*},z)\right]\widehat{P}(z\mid x^{*},s)\,\widehat{P}(s)$
 
+$\Rightarrow \int_{s}\sum_{z}\left[\widehat{E}(Y \mid x,z) - \widehat{E}(Y \mid x^{*},z)\right]\widehat{P}(z \mid x^{*}, s)\,\widehat{f}_S(s)\, ds$
+
+$\approx \frac{1}{n}\sum_{i=1}^{n}\sum_{z}\left[\widehat{E}(Y \mid x,z) - \widehat{E}(Y \mid x^{*},z)\right]\widehat{P}(z \mid x^{*}, s_i)$ 
+
+by monte carlo approximation, where $s_i$ are observed values of S in the data.
+
 
 ```{r}
 estimate_NDE <- function(data, x = 1, x_star = 0) {
@@ -102,16 +108,12 @@ estimate_NDE <- function(data, x = 1, x_star = 0) {
   n <- nrow(data)
   nde_sum <- 0
   
-  # By monte carlo approximation, integral over s is approximated by sum over observed s values
-  # p(s) is approximated by the empirical distribution of s
-  p_s <- 1/n
-  
   for (i in 1:n) {
     s_i <- data$S[i]
     
     for(z in c(0,1)) {
       
-      # get the predicted p(Z=1|x*,s) 
+      # get the predicted P(Z=1|x*,s) 
       prob_z1 <- predict(model_Z, newdata = data.frame(X = x_star, S = s_i), type = "response")
       
       if(z == 1) {
@@ -127,11 +129,11 @@ estimate_NDE <- function(data, x = 1, x_star = 0) {
       y_xstar <- predict(model_Y, newdata = data.frame(X = x_star, Z = z), type = "response")
       
       # Using the plug-in estimator for NDE 
-      nde_sum <- nde_sum + (y_x - y_xstar)* p_z_xstar * p_s
+      nde_sum <- nde_sum + (y_x - y_xstar)* p_z_xstar
     }
   }
   
-  return(nde_sum)
+  return(nde_sum / n)
 }
 ```
 
@@ -143,6 +145,10 @@ The plug-in estimator for NIE :
 
 $\widehat{\text{NIE}}=\sum_{s}\sum_{z}\widehat{E}(Y\mid x^{*},z)\,\left[\widehat{P}(z\mid x,s) - \widehat{P}(z\mid x^{*},s)\right]\widehat{P}(s)$
 
+$\Rightarrow \int_{s}\sum_{z}\widehat{E}(Y \mid x^{*},z)\,\left[\widehat{P}(z \mid x, s) - \widehat{P}(z \mid x^{*}, s)\right]\widehat{f}_S(s)\, ds$
+
+$\approx \frac{1}{n}\sum_{i=1}^{n}\sum_{z}\widehat{E}(Y \mid x^{*},z)\,\left[\widehat{P}(z \mid x, s_i) - \widehat{P}(z \mid x^{*}, s_i)\right]$
+
 ```{r}
 estimate_NIE <- function(data, x = 1, x_star = 0) {
   # Fit models
@@ -152,16 +158,12 @@ estimate_NIE <- function(data, x = 1, x_star = 0) {
   n <- nrow(data)
   nie_sum <- 0
   
-  # By monte carlo approximation, integral over s is approximated by sum over observed s values
-  # p(s) is approximated by the empirical distribution of s
-  p_s <- 1/n
-  
   for (i in 1:n) {
     s_i <- data$S[i]
     
     for(z in c(0,1)) {
       
-      # get the predicted p(Z=1|x,s) 
+      # get the predicted P(Z=1|x,s) 
       prob_z1 <- predict(model_Z, newdata = data.frame(X = x, S = s_i), type = "response")
       
       if(z == 1) {
@@ -169,7 +171,7 @@ estimate_NIE <- function(data, x = 1, x_star = 0) {
       } else {
         p_zx <- 1 - prob_z1
       }
-      # get the predicted p(Z=1|x*,s)
+      # get the predicted P(Z=1|x*,s)
       prob_z0 <- predict(model_Z, newdata = data.frame(X = x_star, S = s_i), type = "response")
       
       if(z == 1) {
@@ -182,11 +184,11 @@ estimate_NIE <- function(data, x = 1, x_star = 0) {
       y_z_xstar <- predict(model_Y, newdata = data.frame(X = x_star, Z = z), type = "response")
       
       # Using the plug-in estimator for NIE
-      nie_sum <- nie_sum + y_z_xstar * (p_zx - p_z_xstar) * p_s
+      nie_sum <- nie_sum + y_z_xstar * (p_zx - p_z_xstar)
     }
   }
   
-  return(nie_sum)
+  return(nie_sum / n)
 }
 ```
 
